@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 
 
 class StreamingChat:
-    def __init__(self, model_path="/home/asu/qwen3-0.6b", typing_effect=True):
+    def __init__(self, model_path="/home/asu/qwen3-0.6b", typing_effect=True, system_prompt=None):
         """初始化聊天系统"""
         print("🤖 正在加载模型，请稍候...")
         
@@ -19,6 +19,12 @@ class StreamingChat:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
         self.llm = LLM(self.model_path, enforce_eager=True, tensor_parallel_size=1)
         self.typing_effect = typing_effect
+        
+        # 设置system prompt
+        if system_prompt is None:
+            self.system_prompt = "你是一个有用、无害、诚实的AI助手。请用中文回答问题。"
+        else:
+            self.system_prompt = system_prompt
         
         # 设置采样参数
         self.sampling_params = SamplingParams(
@@ -28,12 +34,18 @@ class StreamingChat:
         )
         
         effect_status = "开启" if typing_effect else "关闭"
-        print(f"✅ 模型加载完成！打字效果: {effect_status}\n")
+        print(f"✅ 模型加载完成！打字效果: {effect_status}")
+        print(f"🎯 System Prompt: {self.system_prompt[:50]}...")
+        print()
     
     def format_prompt(self, user_input):
         """格式化用户输入为聊天模板"""
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_input}
+        ]
         return self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": user_input}],
+            messages,
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=True

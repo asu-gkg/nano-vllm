@@ -6,11 +6,12 @@ import triton.language as tl
 
 from nanovllm.utils.context import get_context
 
-# ⚡ 性能优化：已注释掉所有数值检查以提升性能
+# ⚡ 性能优化：已注释掉数值检查以提升性能
 # 注释掉的检查包括：torch.isnan(), torch.isinf(), 统计计算等
-# 同时注释掉了3个涉及GPU->CPU同步的assert语句
-# 保留了大部分形状检查的assert（性能影响很小）
-# 如需调试，可以取消注释相关检查
+# 修复了4个.item()调用以支持CUDA Graph capture
+# 恢复了关键的形状检查assert（防止崩溃，性能影响很小）
+# 保留了重要的安全检查，移除了性能瓶颈
+# 如需调试，可以取消注释相关数值检查
 
 
 @triton.jit
@@ -93,9 +94,9 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
                                    max_seqlen_q, max_seqlen_k, softmax_scale, 
                                    causal=True, **kwargs):
     # 步骤1: 验证输入形状的假设
-    # assert q.dim() == 3, f"期望q是3维 [total_tokens, num_heads, head_dim], 实际: {q.shape}"
-    # assert k.dim() == 3, f"期望k是3维 [total_tokens, num_kv_heads, head_dim], 实际: {k.shape}"
-    # assert v.dim() == 3, f"期望v是3维 [total_tokens, num_kv_heads, head_dim], 实际: {v.shape}"
+    assert q.dim() == 3, f"期望q是3维 [total_tokens, num_heads, head_dim], 实际: {q.shape}"
+    assert k.dim() == 3, f"期望k是3维 [total_tokens, num_kv_heads, head_dim], 实际: {k.shape}"
+    assert v.dim() == 3, f"期望v是3维 [total_tokens, num_kv_heads, head_dim], 实际: {v.shape}"
     
     # 检查输入数值有效性 - 注释掉以提升性能
     # if torch.isnan(q).any() or torch.isnan(k).any() or torch.isnan(v).any():
@@ -134,7 +135,7 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
     
     # 步骤4: 处理GQA - 扩展k,v头数以匹配q
     if num_kv_heads != num_heads:
-        # assert num_heads % num_kv_heads == 0, f"num_heads({num_heads})必须是num_kv_heads({num_kv_heads})的倍数"
+        assert num_heads % num_kv_heads == 0, f"num_heads({num_heads})必须是num_kv_heads({num_kv_heads})的倍数"
         repeat_factor = num_heads // num_kv_heads
         
         k_padded = k_padded.repeat_interleave(repeat_factor, dim=2)
@@ -205,13 +206,13 @@ def attn_with_kvcache(q, k_cache, v_cache, cache_seqlens,
     #     raise ValueError("[Decode] 输入q包含Inf!")
     
     # 步骤1: 验证输入形状的假设
-    # assert q.dim() == 4, f"期望q是4维 [batch_size, 1, num_heads, head_dim], 实际: {q.shape}"
+    assert q.dim() == 4, f"期望q是4维 [batch_size, 1, num_heads, head_dim], 实际: {q.shape}"
     batch_size, seq_len_q, num_heads, head_dim = q.shape
-    # assert seq_len_q == 1, f"decode阶段q的seq_len应该是1, 实际: {seq_len_q}"
+    assert seq_len_q == 1, f"decode阶段q的seq_len应该是1, 实际: {seq_len_q}"
     
-    # # 步骤2: 验证分块KV缓存
-    # if k_cache.numel() == 0 or v_cache.numel() == 0:
-    #     return torch.zeros_like(q)
+    # 步骤2: 验证分块KV缓存
+    if k_cache.numel() == 0 or v_cache.numel() == 0:
+        return torch.zeros_like(q)
     
     # 检查缓存数值有效性 - 注释掉以提升性能
     # if torch.isnan(k_cache).any() or torch.isnan(v_cache).any():
@@ -248,7 +249,7 @@ def attn_with_kvcache(q, k_cache, v_cache, cache_seqlens,
         
         outputs = []
         for batch_idx in range(batch_size):
-            curr_cache_len = cache_seqlens[batch_idx].item()
+            curr_cache_len = cache_seqlens[batch_idx]  # 避免.item()调用以支持CUDA Graph
             if curr_cache_len == 0:
                 batch_output = torch.zeros(1, 1, num_heads, head_dim, 
                                          dtype=q.dtype, device=q.device)
@@ -313,7 +314,7 @@ def attn_with_kvcache(q, k_cache, v_cache, cache_seqlens,
         
         outputs = []
         for batch_idx in range(batch_size):
-            curr_cache_len = cache_seqlens[batch_idx].item()
+            curr_cache_len = cache_seqlens[batch_idx]  # 避免.item()调用以支持CUDA Graph
             if curr_cache_len == 0:
                 batch_output = torch.zeros(1, 1, num_heads, head_dim, 
                                          dtype=q.dtype, device=q.device)
@@ -333,7 +334,7 @@ def attn_with_kvcache(q, k_cache, v_cache, cache_seqlens,
             
             # 处理完整的块
             for block_idx in range(num_complete_blocks):
-                physical_block_id = batch_block_table[block_idx].item()
+                physical_block_id = batch_block_table[block_idx]  # 避免.item()调用以支持CUDA Graph
                 # if physical_block_id == -1:
                 #     raise ValueError(f"[Decode] batch {batch_idx} block {block_idx} 遇到无效物理块ID")
                 
@@ -345,7 +346,7 @@ def attn_with_kvcache(q, k_cache, v_cache, cache_seqlens,
             
             # 处理最后一个不完整的块（如果存在）
             if last_block_len > 0:
-                physical_block_id = batch_block_table[num_complete_blocks].item()
+                physical_block_id = batch_block_table[num_complete_blocks]  # 避免.item()调用以支持CUDA Graph
                 # if physical_block_id == -1:
                 #     raise ValueError(f"[Decode] batch {batch_idx} 最后一个块遇到无效物理块ID")
                 
