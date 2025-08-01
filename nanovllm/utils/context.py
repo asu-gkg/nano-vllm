@@ -25,3 +25,17 @@ def set_context(is_prefill, cu_seqlens_q=None, cu_seqlens_k=None, max_seqlen_q=0
 def reset_context():
     global _CONTEXT
     _CONTEXT = Context()
+
+
+_EXPERT_MANAGER = None
+
+def set_expert_manager(manager):
+    global _EXPERT_MANAGER
+    _EXPERT_MANAGER = manager
+
+def get_expert_manager():
+    return _EXPERT_MANAGER
+
+def reset_expert_manager():
+    global _EXPERT_MANAGER
+    _EXPERT_MANAGER = None

@@ -7,9 +7,8 @@ from multiprocessing.shared_memory import SharedMemory
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
 from nanovllm.models.qwen3 import Qwen3ForCausalLM
-from nanovllm.models.mixtral import MixtralForCausalLM
 from nanovllm.layers.sampler import Sampler
-from nanovllm.utils.context import set_context, get_context, reset_context
+from nanovllm.utils.context import set_context, get_context, reset_context, set_expert_manager
 from nanovllm.utils.loader import load_model
 
 
@@ -29,13 +28,34 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.torch_dtype)
         torch.set_default_device("cuda")
-        # Select model based on config
-        model_type = getattr(hf_config, "model_type", "")
-        if model_type == "mixtral":
+        
+        # Detect model type and create appropriate model
+        model_type = getattr(hf_config, 'model_type', 'qwen')
+        
+        if model_type == 'mixtral' and self.world_size == 1:
+            # Mixtral with dynamic expert loading (only for single GPU)
+            from nanovllm.models.mixtral import MixtralForCausalLM
+            from nanovllm.engine.expert_manager import ExpertManager
+            
+            # Create and set expert manager before model creation
+            self.expert_manager = ExpertManager(
+                model_path=config.model,
+                config=hf_config,
+                device="cuda",
+                max_gpu_experts=30  # Keep up to 42 experts in GPU memory (~22GB)
+            )
+            set_expert_manager(self.expert_manager)
+            
+            # Create Mixtral model
             self.model = MixtralForCausalLM(hf_config)
         else:
-            # Default to Qwen3 for backward compatibility
+            # Default to Qwen3 for other models or multi-GPU Mixtral
+            if model_type == 'mixtral' and self.world_size > 1:
+                print(f"Warning: Mixtral dynamic expert loading not supported with tensor_parallel_size={self.world_size}")
+                print("Falling back to standard loading (requires full model in memory)")
             self.model = Qwen3ForCausalLM(hf_config)
+            self.expert_manager = None
+        
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
@@ -112,10 +132,14 @@ class ModelRunner:
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
+        head_dim = getattr(hf_config, 'head_dim', None)
+        if head_dim is None:
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
+        dtype_size = getattr(hf_config, 'torch_dtype', torch.float16).itemsize
+        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * dtype_size
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
+        self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
