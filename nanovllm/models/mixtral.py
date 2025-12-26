@@ -122,7 +122,7 @@ class MixtralSparseMoeBlock(nn.Module):
             else:
                 return torch.zeros_like(hidden_states)
         
-        print(f"[MoE Layer {self.layer_idx}] Processing {num_tokens} tokens")
+        # print(f"[MoE Layer {self.layer_idx}] Processing {num_tokens} tokens")
         
         # Execute expert computation
         final_hidden_states = torch.zeros(
@@ -132,8 +132,8 @@ class MixtralSparseMoeBlock(nn.Module):
         )
         
         # Group tokens by expert for batch processing
-        import time
-        layer_start = time.time()
+        # import time
+        # layer_start = time.time()
         
         for expert_idx in range(self.num_experts):
             # Find all tokens that need this expert
@@ -142,7 +142,7 @@ class MixtralSparseMoeBlock(nn.Module):
                 continue
             
             num_tokens = expert_mask.sum().item()
-            print(f"[MoE Layer {self.layer_idx}] Expert {expert_idx} needed by {num_tokens} tokens")
+            # print(f"[MoE Layer {self.layer_idx}] Expert {expert_idx} needed by {num_tokens} tokens")
             
             # Get the expert
             expert = expert_manager.get_expert(self.layer_idx, expert_idx)
@@ -153,10 +153,10 @@ class MixtralSparseMoeBlock(nn.Module):
             
             # Compute expert output for all tokens at once
             if expert_input.shape[0] > 0:
-                compute_start = time.time()
+                # compute_start = time.time()
                 expert_output = expert(expert_input)
-                compute_time = time.time() - compute_start
-                print(f"[MoE Layer {self.layer_idx}] Expert {expert_idx} compute time: {compute_time:.3f}s")
+                # compute_time = time.time() - compute_start
+                # print(f"[MoE Layer {self.layer_idx}] Expert {expert_idx} compute time: {compute_time:.3f}s")
                 
                 # Add weighted expert output to final result
                 for i, (token_idx, output) in enumerate(zip(token_indices, expert_output)):
@@ -166,8 +166,8 @@ class MixtralSparseMoeBlock(nn.Module):
                         weight = routing_weights[token_idx, pos]
                         final_hidden_states[token_idx] += weight * output
         
-        layer_time = time.time() - layer_start
-        print(f"[MoE Layer {self.layer_idx}] Total time: {layer_time:.2f}s")
+        # layer_time = time.time() - layer_start
+        # print(f"[MoE Layer {self.layer_idx}] Total time: {layer_time:.2f}s")
         
         # Restore original shape if needed
         if is_3d:
@@ -315,6 +315,11 @@ class MixtralForCausalLM(nn.Module):
         # Use non-parallel LM head for single GPU
         self.lm_head = LMHead(config.vocab_size, config.hidden_size)
         self.is_mixtral = True  # Marker for loader
+        
+        # Handle tied embeddings (critical for correct output!)
+        if getattr(config, 'tie_word_embeddings', False):
+            # Share weights between input embeddings and output head
+            self.lm_head.weight = self.model.embed_tokens.weight
         
     def forward(self, input_ids, positions):
         hidden_states = self.model(input_ids, positions)

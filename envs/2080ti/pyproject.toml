@@ -1,0 +1,27 @@
+[project]
+name = "nano-vllm-2080ti"
+version = "0.1.0"
+description = "nano-vllm environment for RTX 2080 Ti (Turing architecture)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers",
+    "triton",
+    "sentencepiece",
+    "protobuf",
+    "xxhash",
+    "einops",
+    # 构建依赖
+    "setuptools",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+
+[tool.uv]
+# 2080 Ti 专用配置
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+# Flash Attention 1.x 需要手动安装:
+# uv pip install flash-attn==1.0.9 --no-build-isolation -i https://pypi.tuna.tsinghua.edu.cn/simple

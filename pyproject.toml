@@ -25,3 +25,8 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nanovllm*"]
+
+[tool.uv.workspace]
+members = [
+    "envs/2080ti",
+]

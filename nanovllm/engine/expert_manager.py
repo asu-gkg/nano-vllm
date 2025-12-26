@@ -79,7 +79,7 @@ class ExpertManager:
                     return self.expert_cache[key]
         
         # Slow path: need to load
-        print(f"[ExpertManager] Loading expert {key}...")
+        # print(f"[ExpertManager] Loading expert {key}...")
         import time
         start_time = time.time()
         
@@ -88,7 +88,7 @@ class ExpertManager:
             if key in self.expert_cache:
                 self.expert_cache.move_to_end(key)
                 self.hits += 1
-                print(f"[ExpertManager] Expert {key} found in cache after lock")
+                # print(f"[ExpertManager] Expert {key} found in cache after lock")
                 return self.expert_cache[key]
             
             # Expert not in cache, need to load
@@ -98,7 +98,7 @@ class ExpertManager:
             if len(self.expert_cache) >= self.max_gpu_experts:
                 # Evict least recently used expert
                 evict_key, evicted_expert = self.expert_cache.popitem(last=False)
-                print(f"[ExpertManager] Evicting expert {evict_key}")
+                # print(f"[ExpertManager] Evicting expert {evict_key}")
                 # Move expert to CPU to free GPU memory
                 evicted_expert.cpu()
                 del evicted_expert
@@ -109,7 +109,7 @@ class ExpertManager:
             self.expert_cache[key] = expert
             
             load_time = time.time() - start_time
-            print(f"[ExpertManager] Expert {key} loaded in {load_time:.2f}s")
+            # print(f"[ExpertManager] Expert {key} loaded in {load_time:.2f}s")
             
             return expert
     

@@ -8,6 +8,15 @@ Nano-vLLM is a lightweight implementation of vLLM built from scratch in ~1,200 l
 
 ## Development Commands
 
+### Setup and Installation
+```bash
+# Install package in development mode
+pip install -e .
+
+# Install dependencies
+pip install -r requirements-local_chat.txt  # If using ktransformers components
+```
+
 ### Running Examples
 ```bash
 # Basic example with Qwen3 (requires model weights)
@@ -21,6 +30,18 @@ python bench.py
 
 # Interactive chat
 python chat.py
+```
+
+### Testing and Debugging
+```bash
+# Run individual test scripts for Mixtral components
+python scripts/test_mixtral_loader.py
+python scripts/test_mixtral_model.py
+python scripts/test_mixtral_runner.py
+python scripts/test_expert_manager.py
+
+# Debug script for tokenization comparison
+python scripts/debug.py
 ```
 
 ### Model Download
@@ -90,3 +111,26 @@ For tensor parallelism, the system spawns multiple processes:
 - Default tensor parallel communication uses `tcp://localhost:2333`
 - Model type is automatically detected from the config file (`model_type` field)
 - Mixtral models require more GPU memory due to the MoE architecture
+
+## Development Patterns
+
+### Model Integration
+When adding new model support:
+1. Create model implementation in `nanovllm/models/` (follow `qwen3.py` or `mixtral.py` patterns)
+2. Add required layers to `nanovllm/layers/` if needed
+3. Update model loading logic in `nanovllm/utils/loader.py`
+4. Add configuration detection in `nanovllm/config.py`
+5. Create test scripts in `scripts/` directory
+
+### Key Implementation Details
+- **Inheritance Pattern**: `LLM` class inherits from `LLMEngine` for a clean API
+- **Process Architecture**: Rank 0 handles coordination, other ranks handle distributed execution
+- **Memory Management**: KV-cache blocks managed by `BlockManager` with configurable block size
+- **Sequence Flow**: `Scheduler` → `ModelRunner` → model execution → token generation
+- **Tokenization**: Handled by HuggingFace tokenizers with automatic EOS token detection
+
+### Testing Strategy
+- Component-specific test scripts in `scripts/` directory
+- No formal test framework - use individual Python scripts
+- Test scripts follow pattern: `test_[component]_[function].py`
+- Debug utilities available in `scripts/debug.py`
