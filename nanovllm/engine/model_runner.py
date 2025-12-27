@@ -1,3 +1,4 @@
+import os
 import pickle
 import torch
 import torch.distributed as dist
@@ -26,7 +27,26 @@ class ModelRunner:
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(hf_config.torch_dtype)
+        
+        # Check GPU architecture and Flash Attention compatibility
+        # Flash Attention 1.x on Turing (2080 Ti) only supports float16
+        gpu_major, gpu_minor = torch.cuda.get_device_capability(rank)
+        is_turing = gpu_major == 7
+        
+        # Check if SVD decomposition exists (which might use Flash Attention)
+        svd_path = os.path.join(config.model, "svd_experts")
+        use_svd = os.path.exists(svd_path) and os.path.exists(
+            os.path.join(svd_path, "metadata.json")
+        )
+        
+        # Force float16 for Turing + Flash Attention 1.x
+        if is_turing and use_svd:
+            model_dtype = torch.float16
+            print(f"[ModelRunner] Turing GPU detected, forcing float16 for Flash Attention 1.x compatibility")
+        else:
+            model_dtype = hf_config.torch_dtype
+        
+        torch.set_default_dtype(model_dtype)
         torch.set_default_device("cuda")
         
         # Detect model type and create appropriate model
@@ -35,15 +55,31 @@ class ModelRunner:
         if model_type == 'mixtral' and self.world_size == 1:
             # Mixtral with dynamic expert loading (only for single GPU)
             from nanovllm.models.mixtral import MixtralForCausalLM
-            from nanovllm.engine.expert_manager import ExpertManager
             
-            # Create and set expert manager before model creation
-            self.expert_manager = ExpertManager(
-                model_path=config.model,
-                config=hf_config,
-                device="cuda",
-                max_gpu_experts=30  # Keep up to 42 experts in GPU memory (~22GB)
-            )
+            if use_svd:
+                # Use SVD Expert Manager (faster loading, lower memory)
+                from nanovllm.engine.svd_expert_manager import SVDExpertManager
+                print(f"[ModelRunner] Using SVD Expert Manager from {svd_path}")
+                
+                self.expert_manager = SVDExpertManager(
+                    svd_path=svd_path,
+                    device="cuda",
+                    dtype=model_dtype,  # Use model_dtype (float16 for Turing)
+                    preload_v_to_cpu=False,  # Use mmap for lower memory
+                )
+            else:
+                # Use original Expert Manager
+                from nanovllm.engine.expert_manager import ExpertManager
+                print(f"[ModelRunner] Using original Expert Manager (no SVD found at {svd_path})")
+                print(f"[ModelRunner] Hint: Run 'python scripts/decompose_experts.py --model-path {config.model}' to create SVD decomposition")
+                
+                self.expert_manager = ExpertManager(
+                    model_path=config.model,
+                    config=hf_config,
+                    device="cuda",
+                    max_gpu_experts=30  # Keep up to 30 experts in GPU memory
+                )
+            
             set_expert_manager(self.expert_manager)
             
             # Create Mixtral model

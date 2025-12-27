@@ -350,14 +350,33 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
                 k_fa = k.repeat_interleave(repeat_factor, dim=1)
                 v_fa = v.repeat_interleave(repeat_factor, dim=1)
             
+            # Flash Attention 1.x on Turing only supports float16
+            # Convert to float16 if needed
+            import torch
+            if torch.cuda.is_available():
+                gpu_major, _ = torch.cuda.get_device_capability()
+                if gpu_major == 7:  # Turing architecture
+                    q_fa = q.to(torch.float16)
+                    k_fa = k_fa.to(torch.float16)
+                    v_fa = v_fa.to(torch.float16)
+                else:
+                    q_fa = q
+            else:
+                q_fa = q
+            
             output = flash_attn_unpadded_func(
-                q, k_fa, v_fa,
+                q_fa, k_fa, v_fa,
                 cu_seqlens_q, cu_seqlens_k,
                 max_seqlen_q, max_seqlen_k,
                 dropout_p=0.0,
                 softmax_scale=softmax_scale,
                 causal=causal,
             )
+            
+            # Convert back to original dtype if needed
+            if output.dtype != q.dtype:
+                output = output.to(q.dtype)
+            
             return output
         except (NameError, RuntimeError) as e:
             # 如果失败，继续尝试其他方案

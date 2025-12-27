@@ -69,14 +69,17 @@ def generate_text(
     with torch.inference_mode():
         # Run prefill
         token_ids = runner.run([sequence], is_prefill=True)
+        print(f"Prefill returned: {token_ids}")
         if token_ids and token_ids[0] is not None:
             generated_tokens.append(token_ids[0])
             sequence.append_token(token_ids[0])
+            print(f"First token: {token_ids[0]} -> '{tokenizer.decode([token_ids[0]], skip_special_tokens=False)}'")
             
             # Decode phase - generate remaining tokens
             for i in range(max_new_tokens - 1):
                 # Check if we hit EOS token
                 if token_ids[0] == tokenizer.eos_token_id:
+                    print(f"Hit EOS token at step {i+1}")
                     break
                     
                 # Allocate new blocks if needed
@@ -90,8 +93,13 @@ def generate_text(
                 if token_ids and token_ids[0] is not None:
                     generated_tokens.append(token_ids[0])
                     sequence.append_token(token_ids[0])
+                    if (i + 1) % 10 == 0:  # 每10个token打印一次
+                        print(f"  Generated {i+1} tokens...")
                 else:
+                    print(f"Decode returned None at step {i+1}")
                     break
+        else:
+            print("Warning: Prefill returned None or empty!")
     
     generation_time = time.time() - start_time
     
@@ -101,6 +109,8 @@ def generate_text(
     
     print(f"\nGenerated {len(generated_tokens)} tokens in {generation_time:.1f}s")
     print(f"Speed: {len(generated_tokens)/generation_time:.1f} tokens/s")
+    print(f"Generated tokens: {generated_tokens[:20]}..." if len(generated_tokens) > 20 else f"Generated tokens: {generated_tokens}")
+    print(f"Generated text: '{generated_text}'")
     
     # Print expert manager stats if available
     if hasattr(runner, 'expert_manager') and runner.expert_manager:
