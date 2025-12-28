@@ -3,7 +3,7 @@ SVD Expert Manager for Mixtral
 
 使用SVD分解的专家权重进行高效推理：
 - U矩阵（共享）常驻GPU
-- V矩阵（专家特定）通过mmap按需加载
+- V矩阵（专家特定）按文件加载，可缓存到内存
 
 数学原理：
     Expert(x) = x @ W ≈ x @ (U @ V) = (x @ U) @ V
@@ -11,7 +11,6 @@ SVD Expert Manager for Mixtral
 
 import os
 import json
-import mmap
 from typing import Dict, Optional, Tuple
 from pathlib import Path
 
@@ -85,7 +84,7 @@ class SVDExpertManager:
     SVD专家管理器
     
     - 启动时加载所有U矩阵到GPU（~350MB）
-    - 运行时按需从mmap加载V矩阵（~22MB/专家）
+    - 运行时按需从文件加载V矩阵（~22MB/专家），可缓存到内存
     """
     
     def __init__(

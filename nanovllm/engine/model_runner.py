@@ -65,7 +65,7 @@ class ModelRunner:
                     svd_path=svd_path,
                     device="cuda",
                     dtype=model_dtype,  # Use model_dtype (float16 for Turing)
-                    preload_v_to_cpu=False,  # Use mmap for lower memory
+                    preload_v_to_cpu=False,  # Load V from file on-demand (lower memory)
                 )
             else:
                 # Use original Expert Manager

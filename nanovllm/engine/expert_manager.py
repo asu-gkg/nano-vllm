@@ -4,6 +4,8 @@ Expert Manager for Mixtral dynamic loading
 This module manages the dynamic loading and caching of MoE experts.
 It maintains an LRU cache of experts in GPU memory and loads/offloads
 experts as needed.
+
+Optimized with file handle caching to avoid repeated file opens.
 """
 
 import os
@@ -14,13 +16,14 @@ from typing import Dict, Tuple, Optional
 import torch
 import torch.nn as nn
 from transformers import MixtralConfig
+from safetensors import safe_open
 
 from nanovllm.models.mixtral import MixtralExpert
-from nanovllm.utils.loader import load_expert_weights, get_expert_weight_info
+from nanovllm.utils.loader import get_expert_weight_info
 
 
 class ExpertManager:
-    """Manages dynamic loading of Mixtral experts"""
+    """Manages dynamic loading of Mixtral experts with file handle caching"""
     
     def __init__(
         self,
@@ -49,12 +52,16 @@ class ExpertManager:
         # LRU cache for loaded experts
         self.expert_cache: OrderedDict[Tuple[int, int], MixtralExpert] = OrderedDict()
         
+        # Cache for safetensors file handles (avoid repeated opens)
+        self.file_handles: Dict[str, safe_open] = {}
+        
         # Thread lock for cache operations
         self.lock = threading.Lock()
         
         # Statistics
         self.hits = 0
         self.misses = 0
+        self.file_opens = 0
         
     def get_expert(self, layer_idx: int, expert_idx: int) -> MixtralExpert:
         """
@@ -113,9 +120,29 @@ class ExpertManager:
             
             return expert
     
+    def _get_file_handle(self, filename: str):
+        """
+        Get or create a cached file handle for a safetensors file
+        
+        Args:
+            filename: Name of the safetensors file
+            
+        Returns:
+            safe_open file handle
+        """
+        if filename not in self.file_handles:
+            file_path = os.path.join(self.model_path, filename)
+            if filename.endswith('.safetensors'):
+                self.file_handles[filename] = safe_open(file_path, framework="pt", device="cpu")
+                self.file_opens += 1
+            else:
+                raise ValueError(f"Unsupported file type: {filename}")
+        
+        return self.file_handles[filename]
+    
     def _load_expert(self, layer_idx: int, expert_idx: int) -> MixtralExpert:
         """
-        Load an expert from disk
+        Load an expert from disk using cached file handles
         
         Args:
             layer_idx: Layer index
@@ -127,8 +154,21 @@ class ExpertManager:
         # Create expert module
         expert = MixtralExpert(self.config)
         
-        # Load weights from disk
-        weights = load_expert_weights(self.model_path, layer_idx, expert_idx)
+        # Load weights from disk using cached file handles
+        key = (layer_idx, expert_idx)
+        if key not in self.expert_info:
+            raise ValueError(f"Expert ({layer_idx}, {expert_idx}) not found")
+        
+        weights = {}
+        for weight_type, (filename, full_name) in self.expert_info[key].items():
+            # Get cached file handle
+            file_handle = self._get_file_handle(filename)
+            
+            # Extract weight tensor
+            if filename.endswith('.safetensors'):
+                weights[weight_type] = file_handle.get_tensor(full_name)
+            else:
+                raise ValueError(f"Unsupported file type: {filename}")
         
         # Create state dict for the expert
         state_dict = {}
@@ -184,6 +224,8 @@ class ExpertManager:
                 "hit_rate": hit_rate,
                 "cached_experts": len(self.expert_cache),
                 "max_experts": self.max_gpu_experts,
+                "file_handles": len(self.file_handles),
+                "file_opens": self.file_opens,
             }
     
     def clear_cache(self):
@@ -199,3 +241,15 @@ class ExpertManager:
             # Reset statistics
             self.hits = 0
             self.misses = 0
+    
+    def close_file_handles(self):
+        """Close all cached file handles"""
+        with self.lock:
+            for handle in self.file_handles.values():
+                if hasattr(handle, '__exit__'):
+                    handle.__exit__(None, None, None)
+            self.file_handles.clear()
+    
+    def __del__(self):
+        """Cleanup file handles on destruction"""
+        self.close_file_handles()

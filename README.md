@@ -162,7 +162,8 @@ See `bench.py` for benchmark.
 ## SVD
 
 ```
-CUDA_VISIBLE_DEVICES=1 uv run python scripts/decompose_experts.py \
+
+CUDA_VISIBLE_DEVICES=0 uv run python scripts/decompose_experts.py \
     --model-path /home/asu/Desktop/nano-vllm/Mixtral-8x7B-v0.1 \
     --rank 256
 
