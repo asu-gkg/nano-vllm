@@ -34,8 +34,10 @@ class ModelRunner:
         is_turing = gpu_major == 7
         
         # Check if SVD decomposition exists (which might use Flash Attention)
+        # Allow disabling SVD via environment variable (for calibration)
         svd_path = os.path.join(config.model, "svd_experts")
-        use_svd = os.path.exists(svd_path) and os.path.exists(
+        disable_svd = os.getenv("NANOVLLM_DISABLE_SVD") == "1"
+        use_svd = (not disable_svd) and os.path.exists(svd_path) and os.path.exists(
             os.path.join(svd_path, "metadata.json")
         )
         

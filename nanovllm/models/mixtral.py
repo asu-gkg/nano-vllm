@@ -13,6 +13,7 @@ from nanovllm.layers.attention import Attention
 from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.layers.rotary_embedding import get_rope
 from nanovllm.utils.context import get_expert_manager
+from nanovllm.utils.moe_calib import get_global_collector
 
 # For single-GPU mode, we need non-parallel versions
 class Embedding(nn.Module):
@@ -107,6 +108,13 @@ class MixtralSparseMoeBlock(nn.Module):
             routing_weights, self.num_experts_per_tok, dim=-1
         )
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        
+        # Collect activation for calibration (if collector is active)
+        collector = get_global_collector()
+        if collector is not None:
+            # hidden_states 必须是进入 MoE FFN 的输入（和 router 输入一致）
+            # selected_experts 是每个 token 选中的 expert id（shape [num_tokens, K]，K=num_experts_per_tok）
+            collector.observe(self.layer_idx, hidden_states, selected_experts)
         
         # Get expert manager
         expert_manager = get_expert_manager()
